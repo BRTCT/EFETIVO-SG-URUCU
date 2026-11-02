@@ -519,6 +519,7 @@ table.pvt td.hl{font-weight:700;color:var(--accent)}
 .fbg small{font-size:11.5px;color:var(--fg-3)}.fbg .neg b,.fbg .neg small{color:var(--neg)}.fbg .warn b,.fbg .warn small{color:var(--warn)}
 .fbn{margin:0;font-size:12px;color:var(--fg-3);line-height:1.45}
 @media (max-width:560px){.fbg{grid-template-columns:repeat(2,minmax(0,1fr))}.pgsum{grid-template-columns:1fr 1fr}.pform3.c3{grid-template-columns:1fr}}
+.switch.sm2{min-height:30px;margin-top:6px;font-size:13px}.switch.sm2 .tr{width:38px;height:22px}.switch.sm2 .tr::after{width:16px;height:16px}.switch.sm2 input:checked+.tr::after{transform:translateX(16px)}
 .matl{display:flex;flex-direction:column;gap:2px;margin:6px 0 2px;max-height:150px;overflow:auto;padding:6px 10px;border-radius:8px;background:var(--surface-2);font-size:12.5px}
 .matl i{font-style:normal;color:var(--fg-3)}.matl span{color:var(--fg-2)}
 .optabs{display:flex;gap:4px;padding:0 max(20px,env(safe-area-inset-right,0px)) 0 22px;background:var(--surface);border-bottom:1px solid var(--line)}
@@ -3472,40 +3473,62 @@ function parseSheet(aoa){
   }
   return {out,vagas};
 }
+const impKey=x=>digits(x.sispat)||('N:'+fold(x.nome));
+function impMatcher(C){const by=new Map(C.map(c=>[impKey(c),c]));const nov=new Map(C.filter(c=>!digits(c.sispat)).map(c=>[fold(c.nome),c]));
+  return p=>by.get(impKey(p))||(digits(p.sispat)?nov.get(fold(p.nome)):undefined)}
 function nextCode(pref,list){let mx=0;list.forEach(x=>{const m=new RegExp('^'+pref+'(\\d+)$').exec(x.codigo||'');if(m)mx=Math.max(mx,+m[1])});return n=>pref+String(mx+n).padStart(2,'0')}
 $('#fileImp').addEventListener('change',async e=>{
   const f=e.target.files[0];e.target.value='';if(!f)return;
   let X;try{X=await loadXLSX()}catch(err){toast('Não foi possível abrir o leitor de Excel. Ele precisa de internet na primeira vez; verifique a conexão.','neg');return}
-  let parsed;
-  try{const wb=X.read(await f.arrayBuffer(),{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];parsed=parseSheet(X.utils.sheet_to_json(ws,{header:1,raw:true,defval:null,blankrows:true}))}catch(err){parsed=null}
-  if(!parsed||!parsed.out.length){blockDialog('Planilha fora do modelo','A primeira aba precisa ter, na linha 2, os títulos BACK, SISPAT, NOME DO FUNCIONÁRIO, SETOR, FUNÇÃO, TRECHO, TRAB., FOLGA, EMBARQ. e os colaboradores a partir da linha 3.');return}
-  planImport(parsed,f.name);
+  let parsed=null,saidas=new Map(),aba='';
+  try{const wb=X.read(await f.arrayBuffer(),{type:'array'});
+    const aoaOf=n=>X.utils.sheet_to_json(wb.Sheets[n],{header:1,raw:true,defval:null,blankrows:true});
+    const isSaida=n=>/AFAST|DEMIT|INSS|TRANSF|SAIDA/.test(fold(n));
+    /* aba do efetivo: a que tem os títulos SISPAT/NOME, de preferência com EFETIVO no nome; nunca a de afastados/demitidos */
+    const cands=wb.SheetNames.filter(n=>!isSaida(n)).sort((a,b)=>(fold(b).includes('EFETIVO')?1:0)-(fold(a).includes('EFETIVO')?1:0));
+    for(const n of cands){const r=parseSheet(aoaOf(n));if(r&&r.out.length){parsed=r;aba=n;break}}
+    /* aba de afastados / demitidos / transferidos, se houver */
+    wb.SheetNames.filter(isSaida).forEach(n=>{const aoa=aoaOf(n);let hi=-1;for(let i=0;i<Math.min(15,aoa.length);i++){const h=(aoa[i]||[]).map(fold);if(h.some(x=>x==='SISPAT')){hi=i;break}}if(hi<0)return;
+      const hh=(aoa[hi]||[]).map(x=>fold(x).replace(/[^A-Z]/g,''));const cs=hh.findIndex(x=>x==='SISPAT'),cn=hh.findIndex(x=>x.startsWith('NOME')),co=hh.findIndex(x=>x.startsWith('OBSERV'));
+      let tipo='demitido';
+      for(let i=0;i<aoa.length;i++){const r=aoa[i]||[];const txt=fold((r.find(v=>typeof v==='string'&&clean(v))||''));const sis=digits(r[cs]);
+        if(!sis&&txt){if(/TRANSF/.test(txt))tipo='transferido';else if(/AFAST|INSS/.test(txt))tipo='afastado';else if(/DEMIT|DESLIG/.test(txt))tipo='demitido';continue}
+        if(i>hi&&sis.length>=5&&!saidas.has(sis))saidas.set(sis,{tipo,nome:clean(r[cn]),obs:co>=0?clean(r[co]):''})}});
+  }catch(err){parsed=null}
+  if(!parsed||!parsed.out.length){blockDialog('Planilha fora do modelo','Não encontrei a aba do efetivo. Ela precisa ter os títulos BACK, SISPAT, NOME DO FUNCIONÁRIO, SETOR, FUNÇÃO, TRECHO, TRAB., FOLGA, EMBARQ. e os colaboradores logo abaixo.');return}
+  planImport(parsed,f.name,saidas,aba);
 });
-function planImport({out,vagas},fname){
-  const C=S.data.colaboradores;const bySis=new Map(C.map(c=>[digits(c.sispat)||c.sispat,c]));
+function planImport({out,vagas},fname,saidas,aba){
+  saidas=saidas||new Map();
+  const C=S.data.colaboradores;const match=impMatcher(C);
   const nSet=new Set(),nFn=new Set(),nTr=new Set();
   const hasS=new Map(S.data.setores.map(x=>[fold(x.nome),x])),hasF=new Map(S.data.funcoes.map(x=>[fold(x.nome),x])),hasT=new Map(S.data.trechos.map(x=>[fold(x.codigo),x]));
   out.forEach(p=>{if(p.setor&&!hasS.has(fold(p.setor)))nSet.add(fold(p.setor));if(p.funcao&&!hasF.has(fold(p.funcao)))nFn.add(fold(p.funcao));if(p.trecho&&!hasT.has(p.trecho))nTr.add(p.trecho)});
-  const novos=out.filter(p=>!bySis.has(p.sispat)).length;const upd=out.length-novos;
-  const seen=new Set(out.map(p=>p.sispat));const fora=C.filter(c=>!seen.has(digits(c.sispat)||c.sispat)).length;
+  const novos=out.filter(p=>!match(p)).length;const upd=out.length-novos;
+  const seen=new Set(out.map(p=>match(p)).filter(Boolean).map(c=>c.id));
+  const foraL=C.filter(c=>!OUTS.includes(c.situacao||'ativo')&&!seen.has(c.id));
+  const sai=foraL.filter(c=>saidas.has(digits(c.sispat))).map(c=>({c,...saidas.get(digits(c.sispat))}));
+  const fora=foraL.length-sai.length;
+  const lst=(a,fn)=>a.length?`<div class="matl">${a.slice(0,30).map(fn).join('')}${a.length>30?`<span>e mais ${a.length-30}</span>`:''}</div>`:'';
   showDlg(`<div class="dh ok"><span class="ic">${ic('file')}</span><div><h3>Importar “${esc(fname)}”?</h3><p>Os colaboradores são reconhecidos pelo SISPAT. Telefone, CPF, situação e histórico de quem já existe são mantidos.</p><ul>
     <li><b>${upd}</b> colaborador${upd!==1?'es':''} atualizado${upd!==1?'s':''}</li><li><b>${novos}</b> colaborador${novos!==1?'es':''} novo${novos!==1?'s':''}</li>
     ${nSet.size||nFn.size||nTr.size?`<li>Novos cadastros: <b>${nSet.size}</b> setor${nSet.size!==1?'es':''}, <b>${nFn.size}</b> funç${nFn.size!==1?'ões':'ão'}, <b>${nTr.size}</b> trecho${nTr.size!==1?'s':''}</li>`:''}
     ${vagas.length?`<li><b>${vagas.length}</b> linha${vagas.length!==1?'s':''} sem SISPAT (vagas em aberto) ficam de fora</li>`:''}
-    ${fora?`<li><b>${fora}</b> colaborador${fora!==1?'es':''} do sistema não está${fora!==1?'ão':''} na planilha e não ser${fora!==1?'ão':'á'} alterado${fora!==1?'s':''}</li>`:''}</ul></div></div>
+    ${sai.length?`<li><b>${sai.length}</b> saíram do efetivo (estão na aba de afastados/demitidos):${lst(sai,x=>`<span>${esc(x.c.nome)} <i>→</i> ${esc(SAIDA[x.tipo].one)}</span>`)}<label class="switch sm2"><input type="checkbox" id="imp-sai" checked><span class="tr"></span><span>Tirar do efetivo e mandar para Saídas</span></label></li>`:''}
+    ${fora?`<li><b>${fora}</b> colaborador${fora!==1?'es':''} do sistema não está${fora!==1?'ão':''} na planilha e não ser${fora!==1?'ão':'á'} alterado${fora!==1?'s':''}:${lst(foraL.filter(c=>!saidas.has(digits(c.sispat))),c=>`<span>${esc(c.nome)}</span>`)}</li>`:''}</ul>${aba?`<p class="mhint">Aba lida: <b>${esc(aba)}</b>${saidas.size?' e a aba de afastados/demitidos':''}.</p>`:''}</div></div>
     <div class="df"><button class="btn" type="button" data-dx>Cancelar</button><button class="btn emph" type="button" data-dok>${ic('upload')}Importar</button></div>`);
-  $('#dlg [data-dok]').addEventListener('click',()=>{applyImport(out);hideDlg()});
+  $('#dlg [data-dok]').addEventListener('click',()=>{const ok=$('#imp-sai');applyImport(out,ok&&ok.checked?sai:[]);hideDlg()});
 }
-function applyImport(out){
-  const now=new Date().toISOString();
+function applyImport(out,sai){
+  const now=new Date().toISOString();sai=sai||[];
   const d=S.data;const sMap=new Map(d.setores.map(x=>[fold(x.nome),x])),fMap=new Map(d.funcoes.map(x=>[fold(x.nome),x])),tMap=new Map(d.trechos.map(x=>[fold(x.codigo),x]));
   const sc=nextCode('ST',d.setores),fc=nextCode('FN',d.funcoes);let ns=0,nf=0;
   const getS=n=>{if(!n)return '';const k=fold(n);if(!sMap.has(k)){const r={id:uid(),codigo:sc(++ns),nome:clean(n).toUpperCase(),gestor:'',centroCusto:'',ativo:true,criadoEm:now};d.setores.push(r);sMap.set(k,r)}return sMap.get(k).id};
   const getF=n=>{if(!n)return '';const k=fold(n);if(!fMap.has(k)){const r={id:uid(),codigo:fc(++nf),nome:clean(n).toUpperCase(),cbo:'',tipo:'',setorId:'',ativo:true,criadoEm:now};d.funcoes.push(r);fMap.set(k,r)}return fMap.get(k).id};
   const getT=n=>{if(!n)return '';if(!tMap.has(n)){const r={id:uid(),codigo:n,nome:n,modal:'Aéreo',descricao:'',ativo:true,criadoEm:now};d.trechos.push(r);tMap.set(n,r)}return tMap.get(n).id};
-  const bySis=new Map(d.colaboradores.map(c=>[digits(c.sispat)||c.sispat,c]));const ids=new Set(d.colaboradores.map(c=>c.id));
-  const recs=out.map((p,i)=>{const ex=bySis.get(p.sispat);
-    let id=ex?ex.id:'c'+p.sispat;if(!ex){while(ids.has(id))id='c'+p.sispat+'-'+uid().slice(-4);ids.add(id)}
+  const match=impMatcher(d.colaboradores);const ids=new Set(d.colaboradores.map(c=>c.id));const used=new Set();
+  const recs=out.map((p,i)=>{let ex=match(p);if(ex&&used.has(ex.id))ex=undefined;if(ex)used.add(ex.id);
+    let id=ex?ex.id:(digits(p.sispat)?'c'+p.sispat:'cn'+uid());if(!ex){while(ids.has(id))id='c'+p.sispat+'-'+uid().slice(-4);ids.add(id)}
     const base=ex?{...ex}:{id,cpf:'',telefone:'',situacao:'ativo',admissao:'',hist:[],criadoEm:now};
     let hist=base.hist||[];
     if(ex)hist=histLog({...ex,hist},{...ex,embarque:p.emb,trab:p.trab,folga:p.folga},'Importado da planilha');
@@ -3513,9 +3536,15 @@ function applyImport(out){
   for(let i=0;i<out.length-1;i++){const p=out[i],q=out[i+1];if(p.back==='BACK'&&q.row===p.row+1&&q.sec===p.sec&&q.back!=='BACK'&&!recs[i].backId&&!recs[i+1].backId){recs[i].backId=recs[i+1].id;recs[i+1].backId=recs[i].id}}
   const imp=new Set(recs.map(r=>r.id));const N=recs.length;
   const others=d.colaboradores.filter(c=>!imp.has(c.id)).map(c=>{const o={...c,ordem:N+(c.ordem??0)};if(o.backId&&imp.has(o.backId)){const pr=recs.find(r=>r.id===o.backId);if(pr&&pr.backId!==o.id)o.backId=''}return o});
-  d.colaboradores=[...recs,...others];
+  /* quem saiu do efetivo: vai para Saídas (como em "Tirar do efetivo") */
+  const t0=todayISO();let ord=Math.max(0,...(d.movs||[]).map(m=>m.ordem||0));const saiIds=new Map(sai.map(x=>[x.c.id,x]));
+  const movs=sai.map(x=>({id:uid(),tipo:x.tipo,colabId:x.c.id,...snapOf(x.c),obs:x.obs||x.c.obs||'',motivo:'ATUALIZAÇÃO DO EFETIVO ('+fmtDate(t0)+')',destino:'',data:t0,ordem:++ord,criadoEm:now}));
+  const others2=others.map(c=>{const x=saiIds.get(c.id);if(x)return {...c,situacao:SAIDA[x.tipo].sit,backId:'',atualizadoEm:now,hist:[{d:now,tipo:'saida',t:`Saiu do efetivo: ${SAIDA[x.tipo].one} em ${fmtDate(t0)} · atualização do efetivo pela planilha`},...(c.hist||[])].slice(0,HMAX)};
+    if(c.backId&&saiIds.has(c.backId))return {...c,backId:''};return c});
+  recs.forEach(r=>{if(r.backId&&saiIds.has(r.backId))r.backId=''});
+  d.colaboradores=[...recs,...others2];if(movs.length)d.movs=[...(d.movs||[]),...movs];
   saveLocal();schedule();
-  toast(`Planilha importada: ${N} colaboradores`);
+  toast(`Planilha importada: ${N} colaboradores${movs.length?` · ${movs.length} foram para Saídas`:''}`);
 }
 
 
