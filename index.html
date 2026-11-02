@@ -494,7 +494,8 @@ table.fg tr.gx-estourado .k-sit .st{animation:pulse2 2.4s ease-in-out infinite}
 .mmenu button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;border:0;background:transparent;padding:10px 12px;border-radius:8px;font:inherit;color:var(--fg);cursor:pointer;text-align:left;transition:background .15s}
 .mmenu button:hover,.mmenu button:focus-visible{background:var(--surface-2);outline:none}
 .mmenu b{font-size:13.5px}.mmenu small{font-size:12px;color:var(--fg-3)}
-.dlg .box.wide{width:min(640px,100%);max-height:calc(100vh - 32px);overflow:auto}
+.dlg .box.wide{width:min(640px,100%)}
+.dlg .box>.df{position:sticky;bottom:-22px;z-index:2;margin-top:14px;padding-top:12px;margin-bottom:-22px;padding-bottom:22px;background:var(--surface);box-shadow:0 -10px 14px -12px rgba(0,0,0,.25)}
 .pgsum{display:grid;grid-template-columns:1.6fr 1fr 1fr 1.2fr;gap:10px;margin:14px 0 4px;padding:12px;border-radius:12px;background:var(--surface-2)}
 .pgsum div{display:flex;flex-direction:column;gap:2px;min-width:0}.pgsum .w4{grid-column:1/-1}
 .pgsum span{font-size:11px;font-weight:700;color:var(--fg-3);text-transform:uppercase;letter-spacing:.05em}
@@ -763,7 +764,7 @@ button.kpi.on::after{content:"Filtro ativo";position:absolute;top:12px;right:12p
 
 /* dialog + toast */
 .dlg{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:16px;pointer-events:none}
-.dlg .box{width:min(480px,100%);background:var(--surface);border-radius:16px;box-shadow:var(--sh-2);padding:22px;opacity:0;transform:translateY(10px) scale(.96);transition:opacity .25s var(--ease),transform .3s var(--ease)}
+.dlg .box{max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);overflow-y:auto;overscroll-behavior:contain;width:min(480px,100%);background:var(--surface);border-radius:16px;box-shadow:var(--sh-2);padding:22px;opacity:0;transform:translateY(10px) scale(.96);transition:opacity .25s var(--ease),transform .3s var(--ease)}
 .dlg.on{pointer-events:auto}
 .dlg.on .box{opacity:1;transform:none}
 .dlg .dh{display:flex;gap:12px;align-items:flex-start}
